@@ -1,6 +1,6 @@
 # YouTube Auto Speed
 
-A userscript that automatically adjusts YouTube video playback speed based on content type.
+A userscript that automatically plays YouTube videos at high speed, except for music.
 
 ## Features
 
