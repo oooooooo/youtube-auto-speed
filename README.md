@@ -39,7 +39,7 @@ Since automatic detection isn't perfect, speed buttons (`x1.0` and `x2.7`) are d
 ## Installation
 
 1. Install a userscript manager (e.g., [Tampermonkey](https://www.tampermonkey.net/))
-2. Click on `youtube-auto-speed.user.js` or create a new script and paste the code
+2. Click on [youtube-auto-speed.user.js](https://github.com/oooooooo/youtube-auto-speed/raw/main/youtube-auto-speed.user.js) or create a new script and paste the code
 3. Save and enjoy!
 
 ## License
