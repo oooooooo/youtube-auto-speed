@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Auto Speed
 // @namespace    https://github.com/oooooooo/youtube-auto-speed
-// @version      1.0.0
+// @version      1.0.1
 // @description  Speeds up videos except for music. You can also adjust the speed manually.
 // @author       ooooooooo
 // @match        https://www.youtube.com/*
@@ -25,6 +25,8 @@
 	const BTN_CLASS = "yt-speed-btn-v4";
 
 	let currentRate = RATE_FAST;
+	let manualOverride = false;
+	let lastVideoId = null;
 
 	const style = `
     #${CONTAINER_ID} {
@@ -93,9 +95,27 @@
 		return KEYWORDS.some((k) => title.includes(k.toLowerCase()));
 	}
 
+	function getVideoId() {
+		const params = new URLSearchParams(location.search);
+		return params.get("v") || location.pathname;
+	}
+
 	function autoSetSpeed() {
+		const videoId = getVideoId();
+
+		// 動画が変わったら手動オーバーライドをリセット
+		if (videoId !== lastVideoId) {
+			lastVideoId = videoId;
+			manualOverride = false;
+		}
+
+		// 手動で変更した場合は自動設定をスキップ
+		if (manualOverride) {
+			return;
+		}
+
 		if (isShorts()) {
-			setPlaybackRate(RATE_FAST);
+			setPlaybackRate(RATE_FAST, false);
 			return;
 		}
 
@@ -110,10 +130,13 @@
 			rate = RATE_SLOW;
 		}
 
-		setPlaybackRate(rate);
+		setPlaybackRate(rate, false);
 	}
 
-	function setPlaybackRate(rate) {
+	function setPlaybackRate(rate, isManual = true) {
+		if (isManual) {
+			manualOverride = true;
+		}
 		currentRate = rate;
 		document.querySelectorAll("video").forEach((v) => { v.playbackRate = rate; });
 
@@ -145,7 +168,7 @@
 
 		logo.parentElement.insertBefore(container, logo.nextSibling);
 
-		setPlaybackRate(currentRate);
+		setPlaybackRate(currentRate, false);
 	}
 
 	function observeChanges() {
@@ -162,7 +185,7 @@
 
 		observeChanges();
 
-		document.addEventListener("play", () => setPlaybackRate(currentRate), true);
+		document.addEventListener("play", () => setPlaybackRate(currentRate, false), true);
 
 		const ps = history.pushState;
 		history.pushState = function (...args) {
