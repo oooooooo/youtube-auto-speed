@@ -171,32 +171,14 @@
 		setPlaybackRate(currentRate, false);
 	}
 
-	function observeChanges() {
-		const observer = new MutationObserver(() => {
-			setTimeout(autoSetSpeed, 150);
-		});
-		observer.observe(document.body, { childList: true, subtree: true });
-	}
-
 	function init() {
 		injectStyle();
 		createButtons();
-		setTimeout(autoSetSpeed, 400);
-
-		observeChanges();
 
 		document.addEventListener("play", () => setPlaybackRate(currentRate, false), true);
 
-		const ps = history.pushState;
-		history.pushState = function (...args) {
-			ps.apply(this, args);
-			setTimeout(() => {
-				createButtons();
-				autoSetSpeed();
-			}, 300);
-		};
-
-		window.addEventListener("popstate", () => {
+		// YouTube SPAのナビゲーション完了イベント（初回ロード・ページ遷移両方で発火）
+		window.addEventListener("yt-navigate-finish", () => {
 			setTimeout(() => {
 				createButtons();
 				autoSetSpeed();
