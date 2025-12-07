@@ -1,0 +1,47 @@
+# YouTube Auto Speed
+
+A userscript that automatically adjusts YouTube video playback speed based on content type.
+
+## Features
+
+- **Fast playback (2.7x)** for regular videos
+- **Normal playback (1.0x)** for music content
+- **Manual override buttons** in the YouTube header for quick speed adjustment
+
+## How It Works
+
+### Speed Selection
+
+| Content Type | Speed |
+|--------------|-------|
+| Regular videos | 2.7x |
+| YouTube Shorts | 2.7x |
+| Music | 1.0x |
+
+### Music Detection
+
+A video is considered music if it meets **any** of the following criteria:
+
+1. **Title contains music-related keywords:**
+   - MV
+   - カラオケ / karaoke
+   - 歌ってみた
+   - 歌枠
+
+2. **Duration is 6 minutes or less**
+   - Short videos are often music content
+   - Exception: YouTube Shorts are always played at 2.7x speed
+
+### Manual Override
+
+Since automatic detection isn't perfect, speed buttons (`x1.0` and `x2.7`) are displayed next to the YouTube logo in the top-left corner of the page. Click them to manually adjust the playback speed when needed.
+
+## Installation
+
+1. Install a userscript manager (e.g., [Tampermonkey](https://www.tampermonkey.net/))
+2. Click on `youtube-auto-speed.user.js` or create a new script and paste the code
+3. Save and enjoy!
+
+## License
+
+MIT
