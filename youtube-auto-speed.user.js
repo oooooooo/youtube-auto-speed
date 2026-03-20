@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         YouTube Auto Speed
 // @namespace    https://github.com/oooooooo/youtube-auto-speed
-// @version      1.0.1
+// @version      1.0.2
 // @description  Speeds up videos except for music. You can also adjust the speed manually.
 // @author       ooooooooo
 // @match        https://www.youtube.com/*
-// @run-at       document-idle
+// @run-at       document-start
 // @updateURL    https://github.com/oooooooo/youtube-auto-speed/raw/main/youtube-auto-speed.user.js
 // @downloadURL  https://github.com/oooooooo/youtube-auto-speed/raw/main/youtube-auto-speed.user.js
 // @supportURL   https://github.com/oooooooo/youtube-auto-speed
@@ -27,6 +27,7 @@
 	let currentRate = RATE_FAST;
 	let manualOverride = false;
 	let lastVideoId = null;
+	let videoObserver = null;
 
 	const style = `
     #${CONTAINER_ID} {
@@ -87,12 +88,28 @@
 	}
 
 	function isTitleSlow() {
-		const titleEl = document.querySelector(
-			"h1.title, h1.title yt-formatted-string, #title h1",
-		);
-		if (!titleEl) return false;
-		const title = titleEl.textContent.toLowerCase();
-		return KEYWORDS.some((k) => title.includes(k.toLowerCase()));
+		// 複数のセレクタを試す（YouTubeのバージョンによってDOM構造が異なる）
+		const selectors = [
+			"#title h1 yt-formatted-string",
+			"ytd-watch-metadata h1 yt-formatted-string",
+			"#above-the-fold #title yt-formatted-string",
+			"h1.title yt-formatted-string",
+			"#title h1",
+			"h1.title",
+		];
+
+		let title = "";
+		for (const sel of selectors) {
+			const el = document.querySelector(sel);
+			if (el?.textContent?.trim()) {
+				title = el.textContent;
+				break;
+			}
+		}
+
+		if (!title) return false;
+		const lowerTitle = title.toLowerCase();
+		return KEYWORDS.some((k) => lowerTitle.includes(k.toLowerCase()));
 	}
 
 	function getVideoId() {
@@ -100,7 +117,7 @@
 		return params.get("v") || location.pathname;
 	}
 
-	function autoSetSpeed() {
+	function autoSetSpeed(retryCount = 0) {
 		const videoId = getVideoId();
 
 		// 動画が変わったら手動オーバーライドをリセット
@@ -121,6 +138,24 @@
 
 		const durationSec = getVideoDuration();
 		const titleMatch = isTitleSlow();
+
+		// タイトルがまだ取得できない場合はリトライ
+		if (!titleMatch && retryCount < 5) {
+			const selectors = [
+				"#title h1 yt-formatted-string",
+				"ytd-watch-metadata h1 yt-formatted-string",
+				"#above-the-fold #title yt-formatted-string",
+			];
+			const hasTitle = selectors.some(sel => {
+				const el = document.querySelector(sel);
+				return el?.textContent?.trim();
+			});
+
+			if (!hasTitle) {
+				setTimeout(() => autoSetSpeed(retryCount + 1), 200);
+				return;
+			}
+		}
 
 		let rate = RATE_FAST;
 
@@ -171,20 +206,57 @@
 		setPlaybackRate(currentRate, false);
 	}
 
+	// 動画要素を監視して即座に速度を設定
+	function setupVideoObserver() {
+		if (videoObserver) return;
+
+		videoObserver = new MutationObserver((mutations) => {
+			for (const mutation of mutations) {
+				for (const node of mutation.addedNodes) {
+					if (node.nodeName === "VIDEO") {
+						applySpeedToVideo(node);
+					} else if (node.querySelectorAll) {
+						node.querySelectorAll("video").forEach(applySpeedToVideo);
+					}
+				}
+			}
+		});
+
+		videoObserver.observe(document.documentElement, {
+			childList: true,
+			subtree: true,
+		});
+	}
+
+	function applySpeedToVideo(video) {
+		video.playbackRate = currentRate;
+		// 動画のメタデータ読み込み完了時に自動速度設定
+		video.addEventListener("loadedmetadata", () => {
+			autoSetSpeed();
+		}, { once: true });
+	}
+
 	function init() {
 		injectStyle();
 		createButtons();
+		setupVideoObserver();
+
+		// 既存の動画にも即座に適用
+		document.querySelectorAll("video").forEach(applySpeedToVideo);
 
 		document.addEventListener("play", () => setPlaybackRate(currentRate, false), true);
 
 		// YouTube SPAのナビゲーション完了イベント（初回ロード・ページ遷移両方で発火）
 		window.addEventListener("yt-navigate-finish", () => {
-			setTimeout(() => {
-				createButtons();
-				autoSetSpeed();
-			}, 300);
+			createButtons();
+			autoSetSpeed();
 		});
 	}
 
-	setTimeout(init, 600);
+	// DOMの準備ができたら即座に初期化
+	if (document.readyState === "loading") {
+		document.addEventListener("DOMContentLoaded", init);
+	} else {
+		init();
+	}
 })();
