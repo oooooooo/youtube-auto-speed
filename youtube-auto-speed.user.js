@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Auto Speed
 // @namespace    https://github.com/oooooooo/youtube-auto-speed
-// @version      1.0.3
+// @version      1.0.6
 // @description  Speeds up videos except for music. You can also adjust the speed manually.
 // @author       ooooooooo
 // @match        https://www.youtube.com/*
@@ -13,12 +13,10 @@
 // ==/UserScript==
 
 (() => {
-	// If the title contains these keywords, it is considered music.
-	const KEYWORDS = ["カラオケ", "karaoke", "歌枠", "歌ってみた", "MV"];
+	const KEYWORDS = ["カラオケ", "karaoke", "歌枠", "歌ってみた"];
+	const MV_RE = /【\s*MV\s*】|\(\s*MV\s*\)|「\s*MV\s*」|\bMV\b/i;
 
-	// If the video is shorter than this duration, it is considered music.
 	const MAX_SLOW_DURATION_SEC = 6 * 60;
-
 	const RATE_SLOW = 1.0;
 	const RATE_FAST = 2.7;
 	const CONTAINER_ID = "yt-speed-buttons-container-v4";
@@ -27,9 +25,8 @@
 	let currentRate = RATE_FAST;
 	let manualOverride = false;
 	let lastVideoId = null;
-	let videoObserver = null;
-	const speedHooksAttached = new WeakSet();
-	let playbackKeepAliveIntervalId = null;
+	let observer = null;
+	const hooked = new WeakSet();
 
 	const style = `
     #${CONTAINER_ID} {
@@ -72,75 +69,46 @@
 
 	function parseDuration(text) {
 		if (!text) return null;
-
 		const parts = text.trim().split(":").map(Number);
-
-		if (parts.length === 2) {
-			return parts[0] * 60 + parts[1];
-		} else if (parts.length === 3) {
-			return parts[0] * 3600 + parts[1] * 60 + parts[2];
-		}
+		if (parts.length === 2) return parts[0] * 60 + parts[1];
+		if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
 		return null;
 	}
 
-	function getUiDurationSeconds() {
-		const el = document.querySelector(".ytp-time-duration");
-		if (!el) return null;
-		return parseDuration(el.textContent);
-	}
+	function durationSecondsTrusted() {
+		const v = document.querySelector("ytd-player video.video-stream, video");
+		if (v?.duration > 0) return v.duration;
 
-	function getVideoElementDurationSeconds(video) {
-		const v =
-			video ||
-			document.querySelector("ytd-player video.video-stream") ||
-			document.querySelector("video");
-		if (!v || !Number.isFinite(v.duration) || v.duration <= 0) return null;
-		return v.duration;
-	}
-
-	/** プレイヤーUI が「0:00」のまま等のときは null（誤って短尺判定しない） */
-	function getTrustworthyDurationSeconds() {
-		const fromVideo = getVideoElementDurationSeconds();
-		if (fromVideo != null) return fromVideo;
-		const fromUi = getUiDurationSeconds();
-		if (fromUi != null && fromUi > 0) return fromUi;
-		return null;
-	}
-
-	/** 「mv」の部分一致だけだと動画タイトルを誤判定しやすいので、MV 表記だけ別判定 */
-	function titleImpliesMusicVideoToken(title) {
-		return (
-			/【\s*MV\s*】|\(\s*MV\s*\)|「\s*MV\s*」|\bMV\b/i.test(title)
+		const ui = parseDuration(
+			document.querySelector(".ytp-time-duration")?.textContent ?? "",
 		);
+		return ui != null && ui > 0 ? ui : null;
+	}
+
+	const TITLE_SELECTORS = [
+		"#title h1 yt-formatted-string",
+		"ytd-watch-metadata h1 yt-formatted-string",
+		"#above-the-fold #title yt-formatted-string",
+		"h1.title yt-formatted-string",
+		"#title h1",
+		"h1.title",
+	];
+
+	function getWatchTitle() {
+		for (const sel of TITLE_SELECTORS) {
+			const el = document.querySelector(sel);
+			const t = el?.textContent?.trim();
+			if (t) return el.textContent;
+		}
+		return "";
 	}
 
 	function isTitleSlow() {
-		// 複数のセレクタを試す（YouTubeのバージョンによってDOM構造が異なる）
-		const selectors = [
-			"#title h1 yt-formatted-string",
-			"ytd-watch-metadata h1 yt-formatted-string",
-			"#above-the-fold #title yt-formatted-string",
-			"h1.title yt-formatted-string",
-			"#title h1",
-			"h1.title",
-		];
-
-		let title = "";
-		for (const sel of selectors) {
-			const el = document.querySelector(sel);
-			if (el?.textContent?.trim()) {
-				title = el.textContent;
-				break;
-			}
-		}
-
+		const title = getWatchTitle();
 		if (!title) return false;
-		const lowerTitle = title.toLowerCase();
-		const plainKeywordMatch = KEYWORDS.some((k) => {
-			if (k.toLowerCase() === "mv") return false;
-			return lowerTitle.includes(k.toLowerCase());
-		});
-		return plainKeywordMatch || titleImpliesMusicVideoToken(title);
+		const lower = title.toLowerCase();
+		if (KEYWORDS.some((k) => lower.includes(k.toLowerCase()))) return true;
+		return MV_RE.test(title);
 	}
 
 	function getVideoId() {
@@ -149,66 +117,39 @@
 	}
 
 	function computeAutoRate() {
-		if (isShorts()) {
-			return RATE_FAST;
-		}
+		if (isShorts()) return RATE_FAST;
 
-		const titleMatch = isTitleSlow();
-		const durationSec = getTrustworthyDurationSeconds();
+		const titleSlow = isTitleSlow();
+		const sec = durationSecondsTrusted();
 
-		let rate = RATE_FAST;
-
-		if (titleMatch) {
-			rate = RATE_SLOW;
-		} else if (
-			durationSec != null &&
-			durationSec <= MAX_SLOW_DURATION_SEC
-		) {
-			rate = RATE_SLOW;
-		}
-
-		return rate;
+		if (titleSlow) return RATE_SLOW;
+		if (sec != null && sec <= MAX_SLOW_DURATION_SEC) return RATE_SLOW;
+		return RATE_FAST;
 	}
 
 	function autoSetSpeed(retryCount = 0) {
 		const videoId = getVideoId();
-
-		// 動画が変わったら手動オーバーライドをリセット
 		if (videoId !== lastVideoId) {
 			lastVideoId = videoId;
 			manualOverride = false;
 		}
+		if (manualOverride) return;
 
-		// 手動で変更した場合は自動設定をスキップ
-		if (manualOverride) {
+		const titleSlow = isTitleSlow();
+		const titleReadyStrict = TITLE_SELECTORS.slice(0, 3).some((sel) =>
+			document.querySelector(sel)?.textContent?.trim(),
+		);
+
+		if (!titleSlow && retryCount < 15 && !titleReadyStrict) {
+			setPlaybackRate(RATE_FAST, false);
+			setTimeout(() => autoSetSpeed(retryCount + 1), 120);
 			return;
-		}
-
-		const titleMatch = isTitleSlow();
-
-		// タイトル未取得の間は長さも未確定のことが多い → まず速い速度を適用しつつタイトルを待つ
-		if (!titleMatch && retryCount < 15) {
-			const selectors = [
-				"#title h1 yt-formatted-string",
-				"ytd-watch-metadata h1 yt-formatted-string",
-				"#above-the-fold #title yt-formatted-string",
-			];
-			const hasTitle = selectors.some((sel) => {
-				const el = document.querySelector(sel);
-				return el?.textContent?.trim();
-			});
-
-			if (!hasTitle) {
-				setPlaybackRate(RATE_FAST, false);
-				setTimeout(() => autoSetSpeed(retryCount + 1), 120);
-				return;
-			}
 		}
 
 		setPlaybackRate(computeAutoRate(), false);
 	}
 
-	function applyCurrentRateToAllVideos() {
+	function syncVideosFromCurrentRate() {
 		for (const v of document.querySelectorAll("video")) {
 			if (Math.abs(v.playbackRate - currentRate) > 0.001) {
 				v.playbackRate = currentRate;
@@ -217,17 +158,14 @@
 	}
 
 	function setPlaybackRate(rate, isManual = true) {
-		if (isManual) {
-			manualOverride = true;
-		}
+		if (isManual) manualOverride = true;
 		currentRate = rate;
-		applyCurrentRateToAllVideos();
-		// YouTube が直後のフレームで 1.0 に戻すことがあるためマイクロタスクでもう一度合わせる
-		queueMicrotask(applyCurrentRateToAllVideos);
+		syncVideosFromCurrentRate();
+		queueMicrotask(syncVideosFromCurrentRate);
 
-		document.querySelectorAll(`.${BTN_CLASS}`).forEach((b) => {
-			b.classList.toggle("active", parseFloat(b.dataset.rate) === rate);
-		});
+		for (const b of document.querySelectorAll(`.${BTN_CLASS}`)) {
+			b.classList.toggle("active", Number.parseFloat(b.dataset.rate) === rate);
+		}
 	}
 
 	function createButtons() {
@@ -243,7 +181,7 @@
 			const b = document.createElement("button");
 			b.className = BTN_CLASS;
 			b.innerText = label;
-			b.dataset.rate = rate;
+			b.dataset.rate = String(rate);
 			b.onclick = () => setPlaybackRate(rate);
 			return b;
 		}
@@ -252,103 +190,67 @@
 		container.appendChild(mk(`x${RATE_FAST.toFixed(1)}`, RATE_FAST));
 
 		logo.parentElement.insertBefore(container, logo.nextSibling);
-
 		setPlaybackRate(currentRate, false);
 	}
 
-	// 動画要素を監視して即座に速度を設定
-	function setupVideoObserver() {
-		if (videoObserver) return;
+	function hookVideo(video) {
+		video.playbackRate = currentRate;
+		if (hooked.has(video)) return;
+		hooked.add(video);
+		const onMeta = () => autoSetSpeed();
+		video.addEventListener("loadedmetadata", onMeta);
+		video.addEventListener("durationchange", onMeta);
+	}
 
-		videoObserver = new MutationObserver((mutations) => {
-			for (const mutation of mutations) {
-				for (const node of mutation.addedNodes) {
-					if (node.nodeName === "VIDEO") {
-						applySpeedToVideo(node);
-					} else if (node.querySelectorAll) {
-						node.querySelectorAll("video").forEach(applySpeedToVideo);
+	function observeVideos() {
+		if (observer) return;
+		observer = new MutationObserver((mutations) => {
+			for (const m of mutations) {
+				for (const node of m.addedNodes) {
+					if (node.nodeName === "VIDEO") hookVideo(node);
+					else if (node.querySelectorAll) {
+						for (const v of node.querySelectorAll("video")) hookVideo(v);
 					}
 				}
 			}
 		});
-
-		videoObserver.observe(document.documentElement, {
-			childList: true,
-			subtree: true,
-		});
+		observer.observe(document.documentElement, { childList: true, subtree: true });
 	}
 
-	function applySpeedToVideo(video) {
-		video.playbackRate = currentRate;
-		if (speedHooksAttached.has(video)) return;
-		speedHooksAttached.add(video);
-		const onPersistRate = () => {
-			queueMicrotask(() => {
-				if (Math.abs(video.playbackRate - currentRate) > 0.001) {
-					video.playbackRate = currentRate;
-				}
-			});
-		};
-		video.addEventListener("ratechange", onPersistRate);
-		video.addEventListener("playing", onPersistRate);
-		video.addEventListener("play", onPersistRate);
+	function init() {
+		injectStyle();
+		createButtons();
+		observeVideos();
 
-		// メタデータ・長さ確定のたびに再判定（UI の「0:00」誤判定の解消）
-		const onDurationLike = () => {
-			autoSetSpeed();
-		};
-		video.addEventListener("loadedmetadata", onDurationLike);
-		video.addEventListener("durationchange", onDurationLike);
-	}
+		for (const v of document.querySelectorAll("video")) hookVideo(v);
 
-	function startPlaybackKeepAlive() {
-		if (playbackKeepAliveIntervalId != null) return;
-		playbackKeepAliveIntervalId = window.setInterval(() => {
+		autoSetSpeed();
+
+		// YouTube が再生直後に倍速を戻すことがあるため、一定間隔でだけ合わせる
+		window.setInterval(() => {
 			for (const v of document.querySelectorAll("video")) {
-				if (v.closest("iframe")) continue;
-				const inMainPlayer =
-					v.closest("ytd-player") != null ||
-					v.closest("#movie_player") != null;
-				if (!inMainPlayer) continue;
-
 				if (!Number.isFinite(v.duration) || v.paused || v.ended) continue;
 				if (Math.abs(v.playbackRate - currentRate) > 0.001) {
 					v.playbackRate = currentRate;
 				}
 			}
 		}, 450);
-	}
-
-	function init() {
-		injectStyle();
-		createButtons();
-		setupVideoObserver();
-		startPlaybackKeepAlive();
-
-		// 既存の動画にも即座に適用
-		document.querySelectorAll("video").forEach(applySpeedToVideo);
-
-		// 初回ロード時にも自動速度設定を実行
-		autoSetSpeed();
 
 		document.addEventListener(
 			"play",
 			(e) => {
-				const t = e.target;
-				if (t instanceof HTMLVideoElement) applySpeedToVideo(t);
-				setPlaybackRate(currentRate, false);
+				if (e.target instanceof HTMLVideoElement) hookVideo(e.target);
+				syncVideosFromCurrentRate();
 			},
 			true,
 		);
 
-		// YouTube SPAのナビゲーション完了イベント（初回ロード・ページ遷移両方で発火）
 		window.addEventListener("yt-navigate-finish", () => {
 			createButtons();
 			autoSetSpeed();
 		});
 	}
 
-	// DOMの準備ができたら即座に初期化
 	if (document.readyState === "loading") {
 		document.addEventListener("DOMContentLoaded", init);
 	} else {
